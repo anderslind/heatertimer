@@ -25,9 +25,9 @@
 #define DHTPIN  D6
 
 void dht_wrapper(); // must be declared before the lib initialization
-PietteTech_DHT DHT(DHTPIN, DHTTYPE, dht_wrapper);
+PietteTech_DHT dht(DHTPIN, DHTTYPE, dht_wrapper);
 void dht_wrapper() {
-    DHT.isrCallback();
+    dht.isrCallback();
 }
 
 
@@ -72,16 +72,15 @@ const char SERVICE_PATH[] = "/api/checkin";
  * declarations for the timer events
  */
 
+SparkCorePolledTimer getReadingsTimer(SENSOR_INTERVAL);
 SparkCorePolledTimer callServerTimer(CHECKIN_INTERVAL);
-SparkCorePolledTimer getTemperatureTimer(SENSOR_INTERVAL);
-SparkCorePolledTimer getAirPressureTimer(SENSOR_INTERVAL);
 
 /*
  * declarations for current state
  */
 
 char deviceId[64] = "";
-double currentTemp = MINVALUE;
+double currentTemperature = MINVALUE;
 double currentHumidity = MINVALUE;
 double currentAirPressure = MINVALUE;
 char sensorStatus[32] = "";
@@ -137,6 +136,17 @@ void setStatusConnecting() {
     setPowerLED(155, 165, 0); // kinda orange
 }
 
+void initSensors() {
+    pinMode(DHTPIN, INPUT_PULLUP);
+    //dht.acquire();
+    bmp.begin();
+}
+
+void initWifi() {
+    // select external antenna
+    WiFi.selectAntenna(ANT_EXTERNAL);
+}
+
 bool performAction(ArduinoJson::JsonObject& action) {
     bool result = false;
     
@@ -153,45 +163,50 @@ bool performAction(ArduinoJson::JsonObject& action) {
     return result;
 }
 
-void getTemperature() {
-    int result = DHT.acquireAndWait();
-    currentTemp = MINVALUE;
+void getReadings() {
+    currentTemperature = bmp.readTemperature();
     currentHumidity = MINVALUE;
+    currentAirPressure = MINVALUE;
 
-    switch (result) {
-        case DHTLIB_OK:
-            strcpy(sensorStatus, "OK");
-            currentTemp = DHT.getCelsius();
-            currentHumidity = DHT.getHumidity();
-            break;
-        case DHTLIB_ERROR_CHECKSUM:
-            strcpy(sensorStatus, "Checksum error");
-            break;
-        case DHTLIB_ERROR_ISR_TIMEOUT:
-            strcpy(sensorStatus, "ISR time out error");
-            break;
-        case DHTLIB_ERROR_RESPONSE_TIMEOUT:
-            strcpy(sensorStatus, "Response time out error");
-            break;
-        case DHTLIB_ERROR_DATA_TIMEOUT:
-            strcpy(sensorStatus, "Data time out error");
-            break;
-        case DHTLIB_ERROR_ACQUIRING:
-            strcpy(sensorStatus, "Acquiring");
-            break;
-        case DHTLIB_ERROR_DELTA:
-            strcpy(sensorStatus, "Delta time to small");
-            break;
-        case DHTLIB_ERROR_NOTSTARTED:
-            strcpy(sensorStatus, "Not started");
-            break;
-        default:
-            strcpy(sensorStatus, "Unknown error");
-            break;
+    dht.acquire();
+    delay(100);
+    if (!dht.acquiring()) {
+        int result = dht.getStatus();
+
+        switch (result) {
+            case DHTLIB_OK:
+                strcpy(sensorStatus, "OK");
+                currentTemperature = dht.getCelsius();
+                currentHumidity = dht.getHumidity();
+                break;
+            case DHTLIB_ERROR_CHECKSUM:
+                strcpy(sensorStatus, "Checksum error");
+                break;
+            case DHTLIB_ERROR_ISR_TIMEOUT:
+                strcpy(sensorStatus, "ISR time out error");
+                break;
+            case DHTLIB_ERROR_RESPONSE_TIMEOUT:
+                strcpy(sensorStatus, "Response time out error");
+                break;
+            case DHTLIB_ERROR_DATA_TIMEOUT:
+                strcpy(sensorStatus, "Data time out error");
+                break;
+            case DHTLIB_ERROR_ACQUIRING:
+                strcpy(sensorStatus, "Acquiring");
+                break;
+            case DHTLIB_ERROR_DELTA:
+                strcpy(sensorStatus, "Delta time to small");
+                break;
+            case DHTLIB_ERROR_NOTSTARTED:
+                //strcpy(sensorStatus, "Not started");
+                strcpy(sensorStatus, "OK");
+                break;
+            default:
+                strcpy(sensorStatus, "Unknown error");
+                break;
+        }
     }
-}
-
-void getAirPressure() {
+    
     currentAirPressure = bmp.readPressure();
 }
 
@@ -210,7 +225,7 @@ void callServer() {
       
         jsonBody["sensorId"] = deviceId;
         jsonBody["sensorStatus"] = sensorStatus;
-        jsonBody["currentTemp"] = currentTemp;
+        jsonBody["currentTemp"] = currentTemperature;
         jsonBody["currentHumidity"] = currentHumidity;
         jsonBody["currentAirPressure"] = currentAirPressure;
         jsonBody["wifiSignal"] = WiFi.RSSI();
@@ -273,27 +288,21 @@ void setup() {
 #ifdef DEBUG
     Serial.begin(9600);
 #endif
-    // select external antenna
-    WiFi.selectAntenna(ANT_EXTERNAL);
-
     // get device ID
     strcpy(deviceId, System.deviceID());
     
-    // initialise pins
-    pinMode(DHTPIN, INPUT_PULLUP);
+    // initialise
     initPowerLED();
     initRelays();
-
-    // initialize sensors
-    bmp.begin();
+    initSensors();
+    initWifi();
 
     // setup timer events
-    getTemperatureTimer.SetCallback(getTemperature);
-    getAirPressureTimer.SetCallback(getAirPressure);
+    getReadingsTimer.SetCallback(getReadings);
     callServerTimer.SetCallback(callServer);
 
     // do one cycle at startup
-    getTemperature();
+    getReadings();
     callServer();
 }
 
@@ -303,7 +312,6 @@ void setup() {
  */
  
 void loop() {
-    getTemperatureTimer.Update();
-    getAirPressureTimer.Update();
+    getReadingsTimer.Update();
     callServerTimer.Update();
 }
